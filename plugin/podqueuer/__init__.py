@@ -1,7 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Add podcasts to the Play Queue when they finish downloading.
+Remember podcast playback positions and restore them when playing.
 
 References:
 	https://lazka.github.io/pgi-docs/RB-3.0/index.html
@@ -16,11 +17,19 @@ from gi.repository import Gio, GLib, GObject, RB, Peas
 def podcast_entry_type_name() -> str:
 	"""
 	This is the name of the entry type that represents podcasts.
-	We use it to search for podcasts and the podcast manager.
+	We use it to search for podcasts, and access the podcast manager,
+	and check whether an entry is a podcast.
 	Using a function to simulate a const in Python.
 	"""
 
 	return 'podcast-post'
+
+def is_entry_a_podcast(entry: RB.RhythmDBEntry) -> bool:
+	"""
+	Given an entry, return True if it's a podcast and False otherwise.
+	"""
+
+	return entry != None and entry.get_entry_type().get_name() == podcast_entry_type_name()
 
 def podcast_status_complete() -> int:
 	"""
@@ -81,14 +90,14 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 
 	object = GObject.property(type=GObject.Object)
 
-	def __init__(self):
+	def __init__(self) -> None:
 		"""
 		The constructor shouldn't do any real work, because we might be instantiated while shut off.
 		"""
 
 		super(PodQueuerPlugin, self).__init__()
 
-	def do_activate(self):
+	def do_activate(self) -> None:
 		"""
 		This function is from the Peas.Activatable interface.
 		We use it to set up all of our state, including references and event listeners.
@@ -98,7 +107,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		# We use this reference to add podcasts to the Play Queue
 		self.queue = self.object.props.queue_source
 
-		# Enqueue any already downloaded unplayed podcasts when we start up.
+		# Enqueue any already-downloaded unplayed podcasts when we start up.
 		# If the library is already loaded and we're being activated after the fact,
 		# we can do this immediately.
 		# Otherwise if we're being activated before the library is loaded,
@@ -113,7 +122,89 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		self.podmgr = get_podcast_manager(self.object.props.db, self.object)
 		self.finish_download_id = self.podmgr.connect('finish_download', self.on_finish_download)
 
-	def on_load_complete(self, db: RB.RhythmDB):
+		# RB.ExtDB(name=<name>) is stored in ~/.cache/rhythmbox/<name>
+		# Don't bother with the 'store' or 'load' signals, as they aren't
+		# necessary for simple data (and tend to cause seg faults).
+		self.elapsed_store = RB.ExtDB(name='elapsed')
+
+		# Listen for a new podcast playing, so we can jump to the last time position we heard from it
+		self.object.props.shell_player.connect('playing-song-changed', self.on_playing_song_changed)
+
+		# Listen for updates as the current track plays, so we can save the last time position
+		self.object.props.shell_player.connect('elapsed-changed', self.on_elapsed_changed)
+
+	def elapsed_key(self, entry: RB.RhythmDBEntry, lookup: bool = False) -> RB.ExtDBKey:
+		"""
+		Generate a key for storing elapsed values in ExtDB.
+		You have to use a "store" key to save data and a "lookup" key to load it,
+		which will be identical except for the bool 'lookup' flag.
+
+		In our case, we want to store one value per podcast, so we just use the
+		unique location property as our key.
+		"""
+
+		if lookup:
+			return RB.ExtDBKey.create_lookup('location', entry.get_string(RB.RhythmDBPropType.LOCATION))
+		else:
+			return RB.ExtDBKey.create_storage('location', entry.get_string(RB.RhythmDBPropType.LOCATION))
+
+	def on_playing_song_changed(self, shell_player: RB.ShellPlayer, entry: RB.RhythmDBEntry) -> None:
+		"""
+		React to a change in the current podcast by jumping to the last place where we played it.
+		"""
+
+		if not entry == None and is_entry_a_podcast(entry):
+			key = self.elapsed_key(entry, True)
+			# 'lookup' only returns the storage filename, so we need to do an asynchronous request.
+			self.elapsed_store.request(key, self.on_elapsed_store_request, shell_player)
+
+	def on_elapsed_store_request(self, key: RB.ExtDBKey, store_key: RB.ExtDBKey,
+	 		filename: str, data, shell_player: RB.ShellPlayer) -> None:
+		"""
+		Handle asynchronous loading of the elapsed value.
+		"""
+
+		if not data == None:
+			elapsed = int(data)
+			shell_player.set_playing_time(elapsed)
+
+	def on_elapsed_changed(self, shell_player: RB.ShellPlayer, elapsed: int) -> None:
+		"""
+		React to a change in the position of the current song by saving it to the elapsed ext db.
+		These are sent once per second, which is often enough to be reasonably accurate,
+		but not so often as to bog down the system.
+
+		We ignore values less than 3 to avoid clobbering real values with 0 when first resuming a track.
+		"""
+
+		entry = shell_player.get_playing_entry()
+		if elapsed >= 3 and is_entry_a_podcast(entry):
+			self.set_entry_elapsed(entry, elapsed)
+
+	def set_entry_elapsed(self, entry: RB.RhythmDBEntry, elapsed: int) -> None:
+		"""
+		Store 'elapsed' in our ExtDB so we can jump to it later.
+
+		How to store data in ExtDB:
+
+			store_raw is needed to make it actually store without an
+			intermediate processing stage.
+			See "if (req->data == NULL)" check in do_store_request;
+			store() populates req->value, and store_raw() populates req->data.
+
+			RB.ExtDBSourceType.NONE and SEARCH are silently ignored (!),
+			and USER_EXPLICIT overrides the rest, so we always use it to
+			make sure our store requests aren't ignored.
+			See do_store_request in rb-ext-db.c.
+
+			Only string, byte array, and gstring values may be stored.
+			See "don't know how to save data of type" error message.
+		"""
+
+		key = self.elapsed_key(entry)
+		self.elapsed_store.store_raw(key, RB.ExtDBSourceType.USER_EXPLICIT, str(elapsed))
+
+	def on_load_complete(self, db: RB.RhythmDB) -> None:
 		"""
 		Event handler for RB.RhythmDB.load-complete.
 		We use it to enqueue already downloaded unplayed podcasts.
@@ -121,7 +212,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 
 		self.check_for_unplayed_podcasts(db)
 
-	def check_for_unplayed_podcasts(self, db: RB.RhythmDB):
+	def check_for_unplayed_podcasts(self, db: RB.RhythmDB) -> None:
 		"""
 		Given a RhythmDB, find any unplayed podcasts and add them to the Play Queue.
 		"""
@@ -129,7 +220,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		podtype = db.entry_type_get_by_name(podcast_entry_type_name())
 		db.entry_foreach_by_type(podtype, self.on_found_podcast_entry)
 
-	def on_found_podcast_entry(self, entry: RB.RhythmDBEntry):
+	def on_found_podcast_entry(self, entry: RB.RhythmDBEntry) -> None:
 		"""
 		Given a podcast entry, add it to the play queue if its play count is 0.
 		"""
@@ -137,7 +228,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		if is_entry_downloaded(entry) and is_entry_unplayed(entry):
 			self.found_unplayed_podcast_entry(entry)
 
-	def found_unplayed_podcast_entry(self, entry: RB.RhythmDBEntry):
+	def found_unplayed_podcast_entry(self, entry: RB.RhythmDBEntry) -> None:
 		"""
 		Add an entry to the play queue.
 		It is assumed to be unplayed.
@@ -163,7 +254,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 			iter = model.iter_next(iter)
 		return -1
 
-	def on_finish_download(self, podmgr: RB.PodcastManager, entry: RB.RhythmDBEntry):
+	def on_finish_download(self, podmgr: RB.PodcastManager, entry: RB.RhythmDBEntry) -> None:
 		"""
 		Event handler for RB.PodcastManager.finish_download event.
 		Adds freshly downloaded podcasts to the play queue.
@@ -171,7 +262,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 
 		self.found_unplayed_podcast_entry(entry)
 
-	def do_deactivate(self):
+	def do_deactivate(self) -> None:
 		"""
 		This function is from the Peas.Activatable interface.
 		Teardown all state, including references and signals.
@@ -187,3 +278,4 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 			del self.finish_download_id
 		del self.podmgr
 		del self.queue
+		del self.elapsed_store

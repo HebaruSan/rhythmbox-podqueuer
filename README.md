@@ -3,6 +3,7 @@ A simple [Rhythmbox](https://wiki.gnome.org/Apps/Rhythmbox) plugin that attempts
 * Adds already downloaded unplayed podcasts to Play Queue on startup
 * Adds podcasts to the Play Queue when they finish downloading
 * Podcasts are always added to Play Queue in release date order
+* Remembers playback position for podcasts and restores them on play
 
 ## Setup
 1. From a terminal in the folder where you wish to hold the code:
