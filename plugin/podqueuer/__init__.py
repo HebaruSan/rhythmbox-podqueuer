@@ -107,6 +107,10 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		# We use this reference to add podcasts to the Play Queue
 		self.queue = self.object.props.queue_source
 
+		# This reference will hold the currently playing entry, because
+		# if we retrieve it on the fly as needed we can get the wrong one.
+		self.current_entry = self.object.props.shell_player.get_playing_entry()
+
 		# Enqueue any already-downloaded unplayed podcasts when we start up.
 		# If the library is already loaded and we're being activated after the fact,
 		# we can do this immediately.
@@ -153,6 +157,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		React to a change in the current podcast by jumping to the last place where we played it.
 		"""
 
+		self.current_entry = entry
 		if not entry == None and is_entry_a_podcast(entry):
 			key = self.elapsed_key(entry, True)
 			# 'lookup' only returns the storage filename, so we need to do an asynchronous request.
@@ -177,9 +182,8 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		We ignore values less than 3 to avoid clobbering real values with 0 when first resuming a track.
 		"""
 
-		entry = shell_player.get_playing_entry()
-		if elapsed >= 3 and is_entry_a_podcast(entry):
-			self.set_entry_elapsed(entry, elapsed)
+		if elapsed >= 3 and is_entry_a_podcast(self.current_entry):
+			self.set_entry_elapsed(self.current_entry, elapsed)
 
 	def set_entry_elapsed(self, entry: RB.RhythmDBEntry, elapsed: int) -> None:
 		"""
@@ -279,3 +283,4 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		del self.podmgr
 		del self.queue
 		del self.elapsed_store
+		del self.current_entry
