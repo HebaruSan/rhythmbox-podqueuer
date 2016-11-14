@@ -269,7 +269,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 
 		self.found_unplayed_podcast_entry(entry)
 
-	def on_queue_entry_removed(self, query_model, entry):
+	def on_queue_entry_removed(self, query_model: RB.RhythmDBQueryModel, entry: RB.RhythmDBEntry) -> None:
 		"""
 		Tracks are removed from the Play Queue if you jump to another,
 		even if they haven't finished playing. Ideally we would intercept
