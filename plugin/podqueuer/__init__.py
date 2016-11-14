@@ -137,6 +137,9 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		# Listen for updates as the current track plays, so we can save the last time position
 		self.object.props.shell_player.connect('elapsed-changed', self.on_elapsed_changed)
 
+		# Listen for removal from queue
+		self.queue.props.query_model.connect('entry-removed', self.on_queue_entry_removed)
+
 	def elapsed_key(self, entry: RB.RhythmDBEntry, lookup: bool = False) -> RB.ExtDBKey:
 		"""
 		Generate a key for storing elapsed values in ExtDB.
@@ -164,7 +167,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 			self.elapsed_store.request(key, self.on_elapsed_store_request, shell_player)
 
 	def on_elapsed_store_request(self, key: RB.ExtDBKey, store_key: RB.ExtDBKey,
-	 		filename: str, data, shell_player: RB.ShellPlayer) -> None:
+			filename: str, data, shell_player: RB.ShellPlayer) -> None:
 		"""
 		Handle asynchronous loading of the elapsed value.
 		"""
@@ -265,6 +268,17 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		"""
 
 		self.found_unplayed_podcast_entry(entry)
+
+	def on_queue_entry_removed(self, query_model, entry):
+		"""
+		Tracks are removed from the Play Queue if you jump to another,
+		even if they haven't finished playing. Ideally we would intercept
+		this action and prevent it, but the best we can do is to re-add it.
+		"""
+
+		if is_entry_a_podcast(entry) and is_entry_downloaded(entry) and is_entry_unplayed(entry):
+			# Nothing happens if we try to re-add immediately, so we use idle_add to queue the action for later.
+			GLib.idle_add(self.found_unplayed_podcast_entry, entry)
 
 	def do_deactivate(self) -> None:
 		"""
