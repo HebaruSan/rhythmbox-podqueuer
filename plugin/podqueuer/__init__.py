@@ -132,13 +132,13 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		self.elapsed_store = RB.ExtDB(name='elapsed')
 
 		# Listen for a new podcast playing, so we can jump to the last time position we heard from it
-		self.object.props.shell_player.connect('playing-song-changed', self.on_playing_song_changed)
+		self.playing_song_changed_id = self.object.props.shell_player.connect('playing-song-changed', self.on_playing_song_changed)
 
 		# Listen for updates as the current track plays, so we can save the last time position
-		self.object.props.shell_player.connect('elapsed-changed', self.on_elapsed_changed)
+		self.elapsed_changed_id = self.object.props.shell_player.connect('elapsed-changed', self.on_elapsed_changed)
 
 		# Listen for removal from queue
-		self.queue.props.query_model.connect('entry-removed', self.on_queue_entry_removed)
+		self.queue_entry_removed_id = self.queue.props.query_model.connect('entry-removed', self.on_queue_entry_removed)
 
 	def elapsed_key(self, entry: RB.RhythmDBEntry, lookup: bool = False) -> RB.ExtDBKey:
 		"""
@@ -288,12 +288,26 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		Since the user may customize it at any time, we don't auto-remove anything.
 		"""
 
+		if hasattr(self, 'playing_song_changed_id'):
+			self.object.props.shell_player.disconnect(self.playing_song_changed_id)
+			del self.playing_song_changed_id
+
+		if hasattr(self, 'elapsed_changed_id'):
+			self.object.props.shell_player.disconnect(self.elapsed_changed_id)
+			del self.elapsed_changed_id
+
 		if hasattr(self, 'load_complete_id'):
 			self.object.props.db.disconnect(self.load_complete_id)
 			del self.load_complete_id
+
 		if hasattr(self, 'finish_download_id'):
 			self.podmgr.disconnect(self.finish_download_id)
 			del self.finish_download_id
+
+		if hasattr(self, 'queue_entry_removed_id'):
+			self.queue.props.query_model.disconnect(self.queue_entry_removed_id)
+			del self.queue_entry_removed_id
+
 		del self.podmgr
 		del self.queue
 		del self.elapsed_store
