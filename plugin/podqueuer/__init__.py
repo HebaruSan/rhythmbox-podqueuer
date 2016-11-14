@@ -52,6 +52,10 @@ def get_podcast_manager(db: RB.RhythmDB, shell: RB.Shell) -> RB.PodcastManager:
 	return podsrc.props.podcast_manager
 
 def is_podcast_source_loaded(db: RB.RhythmDB, shell: RB.Shell) -> bool:
+	"""
+	Return True if the podcast source has been downloaded and False otherwise.
+	"""
+
 	podtype = db.entry_type_get_by_name(podcast_entry_type_name())
 	podsrc = shell.get_source_by_entry_type(podtype)
 	libsrc = shell.props.library_source
@@ -274,11 +278,23 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		Tracks are removed from the Play Queue if you jump to another,
 		even if they haven't finished playing. Ideally we would intercept
 		this action and prevent it, but the best we can do is to re-add it.
+
+		Nothing happens if we try to re-add immediately, so we use idle_add to queue the action for later.
+		"""
+
+		GLib.idle_add(self.idle_enqueue_unplayed_podcast, entry)
+
+	def idle_enqueue_unplayed_podcast(self, entry: RB.RhythmDBEntry) -> None:
+		"""
+		After a track is removed from the Play Queue, re-enqueue it if it's
+		an unplayed podcast.
+
+		We do this as a separate idle_add event so the app can finish updating the
+		database first.
 		"""
 
 		if is_entry_a_podcast(entry) and is_entry_downloaded(entry) and is_entry_unplayed(entry):
-			# Nothing happens if we try to re-add immediately, so we use idle_add to queue the action for later.
-			GLib.idle_add(self.found_unplayed_podcast_entry, entry)
+			self.found_unplayed_podcast_entry(entry)
 
 	def do_deactivate(self) -> None:
 		"""
