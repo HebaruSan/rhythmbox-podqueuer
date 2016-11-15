@@ -168,17 +168,21 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		if not entry == None and is_entry_a_podcast(entry):
 			key = self.elapsed_key(entry, True)
 			# 'lookup' only returns the storage filename, so we need to do an asynchronous request.
-			self.elapsed_store.request(key, self.on_elapsed_store_request, shell_player)
+			self.elapsed_store.request(key, self.on_elapsed_store_request, shell_player, entry)
 
 	def on_elapsed_store_request(self, key: RB.ExtDBKey, store_key: RB.ExtDBKey,
-			filename: str, data, shell_player: RB.ShellPlayer) -> None:
+			filename: str, data, shell_player: RB.ShellPlayer, entry: RB.RhythmDBEntry) -> None:
 		"""
 		Handle asynchronous loading of the elapsed value.
+
+		Ignore values within the last 3 seconds on the assumption that they're from
+		full playthroughs and we wish to listen from the start now.
 		"""
 
 		if not data == None:
 			elapsed = int(data)
-			shell_player.set_playing_time(elapsed)
+			if elapsed < entry.get_ulong(RB.RhythmDBPropType.DURATION) - 3:
+				shell_player.set_playing_time(elapsed)
 
 	def on_elapsed_changed(self, shell_player: RB.ShellPlayer, elapsed: int) -> None:
 		"""
@@ -190,7 +194,18 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		"""
 
 		if elapsed >= 3 and is_entry_a_podcast(self.current_entry):
-			self.set_entry_elapsed(self.current_entry, elapsed)
+			if elapsed < self.current_entry.get_ulong(RB.RhythmDBPropType.DURATION) - 3:
+				self.set_entry_elapsed(self.current_entry, elapsed)
+			else:
+				self.clear_entry_elapsed(self.current_entry)
+
+	def clear_entry_elapsed(self, entry: RB.RhythmDBEntry) -> None:
+		"""
+		Remove an entry from the elapsed ExtDB.
+		Used for when we consider a track completed, currently within 3 seconds of the end.
+		"""
+
+		self.elapsed_store.delete(self.elapsed_key(entry))
 
 	def set_entry_elapsed(self, entry: RB.RhythmDBEntry, elapsed: int) -> None:
 		"""
