@@ -12,11 +12,13 @@ Filesystem structure borrowed from https://github.com/mzheng/rhythmbox-pandora
 (since no one else follows the writing guide's "best practice" w/r/t __init__.py)
 """
 
+import typing
 from gi.repository import Gio, GLib, GObject, RB, Peas
 
 def podcast_entry_type_name() -> str:
 	"""
-	This is the name of the entry type that represents podcasts.
+	Name of the entry type that represents podcasts.
+
 	We use it to search for podcasts, and access the podcast manager,
 	and check whether an entry is a podcast.
 	Using a function to simulate a const in Python.
@@ -123,12 +125,12 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		if is_podcast_source_loaded(self.object.props.db, self.object):
 			self.on_load_complete(self, self.object.props.db)
 		else:
-			self.load_complete_id = self.object.props.db.connect(
+			self.connect_signal('load_complete_id', self.object.props.db, \
 				'load-complete', self.on_load_complete)
 
 		# Get a reference to the PodcastManager so we can listen for completed downloads
-		self.podmgr = get_podcast_manager(self.object.props.db, self.object)
-		self.finish_download_id = self.podmgr.connect('finish_download', self.on_finish_download)
+		self.connect_signal('finish_download_id', get_podcast_manager(self.object.props.db, self.object), \
+			'finish_download', self.on_finish_download)
 
 		# RB.ExtDB(name=<name>) is stored in ~/.cache/rhythmbox/<name>
 		# Don't bother with the 'store' or 'load' signals, as they aren't
@@ -136,13 +138,16 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		self.elapsed_store = RB.ExtDB(name='elapsed')
 
 		# Listen for a new podcast playing, so we can jump to the last time position we heard from it
-		self.playing_song_changed_id = self.object.props.shell_player.connect('playing-song-changed', self.on_playing_song_changed)
+		self.connect_signal('playing_song_changed_id', self.object.props.shell_player, \
+			'playing-song-changed', self.on_playing_song_changed)
 
 		# Listen for updates as the current track plays, so we can save the last time position
-		self.elapsed_changed_id = self.object.props.shell_player.connect('elapsed-changed', self.on_elapsed_changed)
+		self.connect_signal('elapsed_changed_id', self.object.props.shell_player, \
+			'elapsed-changed', self.on_elapsed_changed)
 
 		# Listen for removal from queue
-		self.queue_entry_removed_id = self.queue.props.query_model.connect('entry-removed', self.on_queue_entry_removed)
+		self.connect_signal('queue_entry_removed_id', self.queue.props.query_model, \
+			'entry-removed', self.on_queue_entry_removed)
 
 	def elapsed_key(self, entry: RB.RhythmDBEntry, lookup: bool = False) -> RB.ExtDBKey:
 		"""
@@ -311,6 +316,43 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		if is_entry_a_podcast(entry) and is_entry_downloaded(entry) and is_entry_unplayed(entry):
 			self.found_unplayed_podcast_entry(entry)
 
+	def connect_signal(self, id_var_name: str, sender: GObject.Object, signal: str, \
+			handler: typing.Callable[..., None], *args) -> None:
+		"""
+		Connect a signal to a handler and note it in our signals dictionary
+		so we can auto-disonnect it on shutdown.
+		"""
+
+		if not hasattr(self, 'signals'):
+			self.signals = {}
+		self.signals[id_var_name] = (sender, sender.connect(signal, handler, *args))
+
+	def disconnect_signal(self, sender: GObject.Object, id_var_name: str, id: str) -> None:
+		"""
+		Unsubscribe from a signal and delete its reference,
+		given the name of the attribute that holds the id and the sender.
+
+		NOTE: Assumes that you will delete the entire dictionary after all signals are disconnected,
+		rather than deleting each signal from the dictionary one at a time.
+		Python doesn't allow us to modify a dictionary while iterating through it (!!).
+		"""
+
+		if hasattr(self, 'signals'):
+			(sender, id) = self.signals[id_var_name]
+			if not id == None:
+				sender.disconnect(id)
+				self.signals[id_var_name] = None
+
+	def disconnect_all_signals(self) -> None:
+		"""
+		Clean up after all of our signals.
+		"""
+
+		if hasattr(self, 'signals'):
+			for id_var_name, (sender, id) in self.signals.items():
+				self.disconnect_signal(sender, id_var_name, id)
+			del self.signals
+
 	def do_deactivate(self) -> None:
 		"""
 		This function is from the Peas.Activatable interface.
@@ -319,27 +361,7 @@ class PodQueuerPlugin(GObject.Object, Peas.Activatable):
 		Since the user may customize it at any time, we don't auto-remove anything.
 		"""
 
-		if hasattr(self, 'playing_song_changed_id'):
-			self.object.props.shell_player.disconnect(self.playing_song_changed_id)
-			del self.playing_song_changed_id
-
-		if hasattr(self, 'elapsed_changed_id'):
-			self.object.props.shell_player.disconnect(self.elapsed_changed_id)
-			del self.elapsed_changed_id
-
-		if hasattr(self, 'load_complete_id'):
-			self.object.props.db.disconnect(self.load_complete_id)
-			del self.load_complete_id
-
-		if hasattr(self, 'finish_download_id'):
-			self.podmgr.disconnect(self.finish_download_id)
-			del self.finish_download_id
-
-		if hasattr(self, 'queue_entry_removed_id'):
-			self.queue.props.query_model.disconnect(self.queue_entry_removed_id)
-			del self.queue_entry_removed_id
-
-		del self.podmgr
+		self.disconnect_all_signals()
 		del self.queue
 		del self.elapsed_store
 		del self.current_entry
