@@ -13,7 +13,7 @@ A simple [Rhythmbox](https://wiki.gnome.org/Apps/Rhythmbox) plugin that attempts
 
    mkdir -p ~/.local/share/rhythmbox/plugins
 
-   ln -s rhythmbox-podqueuer/plugin ~/.local/share/rhythmbox/plugins/podqueuer
+   mv rhythmbox-podqueuer/plugin ~/.local/share/rhythmbox/plugins/podqueuer
    ```
 2. Run Rhythmbox
 3. Tools &rarr; Plugins
